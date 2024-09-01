@@ -7,14 +7,16 @@ import uuid
 import json
 from json import JSONEncoder
 from typing import List, Set, Dict, Optional
-
+import m3u8_generator
 import attr
+from urllib.request import pathname2url
+
 # etc
 from pathvalidate import sanitize_filename
 from rich.progress import Progress
 
 # TidalAPI
-from tidalapi import Track, Album, Quality
+from tidalapi import Track, Album, Quality, Playlist
 
 # Tidal DL NG
 # Patching the config path
@@ -39,24 +41,19 @@ def fn_logger_sample(*args):
     print(f"fn_logger_sample: {args}")
     pass
 
-class MySettings(Settings):
-    def __init__(self):
-        super().__init__()
-        self.file_path = "config/settings.json"
-        self.read(self.file_path)
-
 settings = Settings()
 tidal = Tidal(settings)
 session = tidal.session
-result = tidal.login(fn_print=print)
+login_result = tidal.login(fn_print=print)
+if not login_result:
+    raise RuntimeError(f"Login to Tidal failed. Update the {my_path_file_token()} file")
 
-TMP_FOLDER="./tmp"
 DL_FOLDER="./dl"
 
 TRACKS_PART = 1000
-def all_favorite_tracks() -> Dict[int, Track]:
+def all_favorite_tracks() -> Dict[str, Track]:
     offset = 0
-    result: Dict[int, Track] = {}
+    result: Dict[str, Track] = {}
     while len(trs := tidal.session.user.favorites.tracks(limit=TRACKS_PART, offset=offset)) > 0:
         for tr in trs:
             result[tr.id] = tr
@@ -65,13 +62,24 @@ def all_favorite_tracks() -> Dict[int, Track]:
 
 
 ALBUMS_PART = 1000
-def all_favorite_albums() -> Dict[int, Album]:
+def all_favorite_albums() -> Dict[str, Album]:
     offset = 0
-    result: Dict[int, Album] = {}
+    result: Dict[str, Album] = {}
     while len(trs := tidal.session.user.favorites.albums(limit=ALBUMS_PART, offset=offset)) > 0:
         for tr in trs:
             result[tr.id] = tr
         offset += ALBUMS_PART
+    return result
+
+
+PLAYLISTS_PART = 1000
+def all_favorite_playlists() -> Dict[str, Playlist]:
+    offset = 0
+    result: Dict[str, Playlist] = {}
+    while len(trs := tidal.session.user.favorites.playlists(limit=PLAYLISTS_PART, offset=offset)) > 0:
+        for tr in trs:
+            result[tr.id] = tr
+        offset += PLAYLISTS_PART
     return result
 
 
@@ -89,11 +97,23 @@ class DictJSONEncoder(JSONEncoder):
         return attr.asdict(o)
 
 
+class FavoriteTracksJSON:
+    def __init__(self):
+        self.favorite_tracks: Dict[str, FavoriteTrackJSON] = {}
+
+    def enlist(self, id: str, track_json: FavoriteTrackJSON):
+        self.favorite_tracks[id] = track_json
+
+        with open(os.path.join(DL_FOLDER, "tidal_favorites.json"), "w") as favorites:
+            json.dump(self.favorite_tracks, favorites, indent=4, cls=DictJSONEncoder)
+        pass
+
+
 class TidalCache:
     def __init__(self):
         self.__dl = None
 
-    def __download_track_if_not_present(self, album: Album, track: Track, temp_dir) -> FavoriteTrackJSON:
+    def __download_track_if_not_present(self, album: Album, track: Track, temp_dir) -> tuple[FavoriteTrackJSON, str]:
         file_template = os.path.join(temp_dir, f"tmpfile_{str(uuid.uuid4())}")
 
         if album.num_volumes > 1:
@@ -137,25 +157,62 @@ class TidalCache:
             album=track.album.name,
             filename=os.path.basename(track_path_name),
             volume=track.volume_num
-        )
+        ), track_path_name
 
     def update(self):
-        my_favorite_albums = all_favorite_albums()
-
-        favorite_tracks_json = {}
-
         with tempfile.TemporaryDirectory() as temp_dir:
+            print('* Caching all the albums marked "Favorite".')
+            my_fav_albums = all_favorite_albums()
+            print(f"{len(my_fav_albums)} to check")
+
+            favorite_tracks_json = FavoriteTracksJSON()
+
             self.__dl = Download(session=session,
                           path_base=temp_dir,
                           fn_logger=fn_logger_sample, progress=Progress())
 
-            for album in my_favorite_albums.values():
+            for album in my_fav_albums.values():
                 for track in album.tracks():
-                    fav_track_json = self.__download_track_if_not_present(album, track, temp_dir)
-                    favorite_tracks_json[track.id] = fav_track_json
+                    fav_track_json, file_path = self.__download_track_if_not_present(album, track, temp_dir)
+                    favorite_tracks_json.enlist(track.id, fav_track_json)
 
-                    with open(os.path.join(DL_FOLDER, "tidal_favorites.json"), "w") as favorites:
-                        json.dump(favorite_tracks_json, favorites, indent=4, cls=DictJSONEncoder)
-                    pass
+            print('* Caching all the tracks marked "Favorite".')
+            my_fav_tracks = all_favorite_tracks()
+            print(f"{len(my_fav_tracks)} to check")
+
+            cached_albums: Dict[str, Album] = {}
+            for track in my_fav_tracks.values():
+                if track.album.id not in my_fav_albums.keys():
+                    # Downloading the album metadata for the track if needed
+                    if track.album.id not in cached_albums:
+                        album = tidal.session.album(track.album.id)
+                        cached_albums[track.album.id] = album
+
+                    fav_track_json, file_path = self.__download_track_if_not_present(cached_albums[track.album.id], track, temp_dir)
+                    favorite_tracks_json.enlist(track.id, fav_track_json)
+
+            print("* Caching all the tracks from the user's playlists and user's favorites playlists")
+            my_fav_playlists = all_favorite_playlists()
+            for pl in tidal.session.user.playlists():
+                my_fav_playlists[pl.id] = pl
+
+
+            for playlist in my_fav_playlists.values():
+                print(f" - Playlist: {playlist.name}")
+
+                with open(f"{sanitize_filename(playlist.name)}.m3u8", "w") as playlist_file:
+                    playlist_file.write("#EXTM3U\n")
+                    for track in playlist.tracks():
+                        if track.album.id not in my_fav_albums.keys():
+                            # Downloading the album metadata for the track if needed
+                            if track.album.id not in cached_albums:
+                                album = tidal.session.album(track.album.id)
+                                cached_albums[track.album.id] = album
+
+                            fav_track_json, file_path = self.__download_track_if_not_present(cached_albums[track.album.id], track,
+                                                                                  temp_dir)
+                            favorite_tracks_json.enlist(track.id, fav_track_json)
+
+                            playlist_file.write(f"#EXTINF:{track.duration},{track.name}\n{pathname2url(file_path)}")
 
         return favorite_tracks_json
