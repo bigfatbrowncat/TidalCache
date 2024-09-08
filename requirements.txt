@@ -1,0 +1,6 @@
+attrs==24.2.0
+pathvalidate==3.2.1
+rich==13.8.0
+tidalapi==0.7.6
+tidal_dl_ng==0.15.6
+pyinstaller
