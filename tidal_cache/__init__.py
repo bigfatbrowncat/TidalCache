@@ -5,14 +5,16 @@ import tempfile
 import shutil
 import uuid
 import json
+from dataclasses import dataclass
 from json import JSONEncoder
-from typing import List, Set, Dict, Optional
+from typing import List, Set, Dict, Optional, Any
 import urllib.parse
 
 import attr
 import urllib
 import urllib.request
 
+from dataclasses_json import dataclass_json
 # etc
 from pathvalidate import sanitize_filename
 from rich.progress import Progress
@@ -36,12 +38,111 @@ tidal_dl_ng.config.path_file_settings = my_path_file_settings
 tidal_dl_ng.config.BaseConfig.path_base = my_path_config_base()
 
 # Importing everything else in the tidal_dl_ng
-from tidal_dl_ng.config import Settings, Tidal
 from tidal_dl_ng.download import Download
+from tidal_dl_ng.helper.decorator import SingletonMeta
+from tidal_dl_ng.constants import SkipExisting, QualityVideo, CoverDimensions
 
-def fn_logger_sample(*args):
-    print(f"fn_logger_sample: {args}")
+
+class my_fn_logger:
+    def error(*args):
+        print(f"Error logged: {args}")
+
+    def __call__(*args):
+        print(f"Message logged: {args}")
+
+
+@dataclass_json
+@dataclass
+class MyModelSettings:
+    skip_existing: SkipExisting = SkipExisting.Disabled
+    # TODO: Implement cover download to a separate file.
+    # album_cover_save: bool = True
+    lyrics_embed: bool = True
+    lyrics_file: bool = False
+    # TODO: Implement API KEY selection.
+    # api_key_index: bool = 0
+    # TODO: Implement album info download to separate file.
+    # album_info_save: bool = False
+    video_download: bool = True
+    # TODO: Implement multi threading for downloads.
+    # multi_thread: bool = False
+    download_delay: bool = True
+    download_base_path: str = "./dl"
+    quality_audio: Quality = Quality.hi_res_lossless
+    quality_video: QualityVideo = QualityVideo.P1080
+    format_album: str = None
+        #(
+        #"Albums/{album_artist} - {album_title}{album_explicit}/{album_track_num}. {artist_name} - {track_title}"
+    #))
+    format_playlist: str = None #"Playlists/{playlist_name}/{artist_name} - {track_title}"
+    format_mix: str = None #"Mix/{mix_name}/{artist_name} - {track_title}"
+    format_track: str = None #"Tracks/{artist_name} - {track_title}{track_explicit}"
+    format_video: str = None #"Videos/{artist_name} - {track_title}{track_explicit}"
+    video_convert_mp4: bool = False
+    path_binary_ffmpeg: str = None #""
+    metadata_cover_dimension: CoverDimensions = CoverDimensions.Px1280
+    extract_flac: bool = True
+    downgrade_on_hi_res: bool = False
+
+tidal_dl_ng.model.cfg.Settings = MyModelSettings
+
+class MyBaseConfig:
+    data: MyModelSettings
+    file_path: str
+    cls_model: MyModelSettings
+
+    def set_option(self, key: str, value: Any) -> None:
+        value_old: Any = getattr(self.data, key)
+
+        if type(value_old) == bool:  # noqa: E721
+            value = True if value.lower() in ("true", "1", "yes", "y") else False  # noqa: SIM210
+        elif type(value_old) == int and type(value) != int:  # noqa: E721
+            value = int(value)
+
+        setattr(self.data, key, value)
+
+    def read(self, path: str) -> bool:
+        # Do nothing, no outer settings file
+        self.data = self.cls_model
+        return True
+
+    def save(self, config_to_compare: str = None) -> None:
+        # Do nothing, no outer settings file
+        pass
+
+
+original_BaseConfig_read = tidal_dl_ng.config.BaseConfig.read
+
+def BaseConfig_read(self, path: str) -> bool:
+    # Do nothing, no outer settings file
+    if path.endswith("token.json"):
+        return original_BaseConfig_read(self, path=path)
+    else:
+        self.data = self.cls_model
+    return True
+tidal_dl_ng.config.BaseConfig.read = BaseConfig_read
+
+def BaseConfig_save(self, config_to_compare: str = None) -> None:
+    # Do nothing, no outer settings file
     pass
+tidal_dl_ng.config.BaseConfig.save = BaseConfig_save
+
+#tidal_dl_ng.config.BaseConfig = MyBaseConfig
+from tidal_dl_ng.config import BaseConfig
+
+# class MySettings(BaseConfig, metaclass=SingletonMeta):
+#     def __init__(self):
+#         self.cls_model = MyModelSettings
+#         #self.file_path = my_path_file_settings()
+#         #self.read(self.file_path)
+#         self.data = self.cls_model
+
+
+
+
+# tidal_dl_ng.config.Settings = MySettings
+
+from tidal_dl_ng.config import Settings, Tidal
 
 settings = Settings()
 tidal = Tidal(settings)
@@ -50,7 +151,7 @@ login_result = tidal.login(fn_print=print)
 if not login_result:
     raise RuntimeError(f"Login to Tidal failed. Update the {my_path_file_token()} file")
 
-DL_FOLDER="./dl"
+#DL_FOLDER="./dl"
 
 TRACKS_PART = 1000
 def all_favorite_tracks() -> Dict[str, Track]:
@@ -100,34 +201,34 @@ class DictJSONEncoder(JSONEncoder):
 
 
 class FavoriteTracksJSON:
-    def __init__(self):
+    def __init__(self, library_dir):
         self.favorite_tracks: Dict[str, FavoriteTrackJSON] = {}
 
-    def enlist(self, id: str, track_json: FavoriteTrackJSON):
+    def enlist(self, library_dir: str, id: str, track_json: FavoriteTrackJSON):
         self.favorite_tracks[id] = track_json
 
-        with open(os.path.join(DL_FOLDER, "tidal_favorites.json"), "w") as favorites:
+        with open(os.path.join(library_dir, "tidal_favorites.json"), "w") as favorites:
             json.dump(self.favorite_tracks, favorites, indent=4, cls=DictJSONEncoder)
         pass
 
 
 class TidalCache:
-    def __init__(self):
+    def __init__(self, library_dir: str):
         self.__dl = None
+        self.__library_dir = library_dir
 
     def __download_track_if_not_present(self, album: Album, track: Track, temp_dir, line_prefix='  ') -> tuple[FavoriteTrackJSON, str]:
         file_template = os.path.join(temp_dir, f"tmpfile_{str(uuid.uuid4())}")
-
         if album.num_volumes > 1:
             track_path = os.path.join(
-                DL_FOLDER,
+                self.__library_dir,
                 sanitize_filename(track.artist.name),
                 sanitize_filename(f"{album.year} - {track.album.name}"),
                 sanitize_filename(f"Volume {track.volume_num}")
             )
         else:
             track_path = os.path.join(
-                DL_FOLDER,
+                self.__library_dir,
                 sanitize_filename(track.artist.name),
                 sanitize_filename(f"{album.year} - {track.album.name}")
             )
@@ -167,16 +268,16 @@ class TidalCache:
             my_fav_albums = all_favorite_albums()
             print(f"{len(my_fav_albums)} albums to check")
 
-            favorite_tracks_json = FavoriteTracksJSON()
+            favorite_tracks_json = FavoriteTracksJSON(self.__library_dir)
 
             self.__dl = Download(session=session,
                           path_base=temp_dir,
-                          fn_logger=fn_logger_sample, progress=Progress())
+                          fn_logger=my_fn_logger, progress=Progress())
 
             for album in my_fav_albums.values():
                 for track in album.tracks():
                     fav_track_json, file_path = self.__download_track_if_not_present(album, track, temp_dir, line_prefix='  ')
-                    favorite_tracks_json.enlist(track.id, fav_track_json)
+                    favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
 
             print('* Caching all the tracks marked "Favorite"... ', end='')
             my_fav_tracks = all_favorite_tracks()
@@ -191,7 +292,7 @@ class TidalCache:
                         cached_albums[track.album.id] = album
 
                     fav_track_json, file_path = self.__download_track_if_not_present(cached_albums[track.album.id], track, temp_dir, line_prefix='  ')
-                    favorite_tracks_json.enlist(track.id, fav_track_json)
+                    favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
 
             print("* Caching all the tracks from the user's playlists and user's favorites playlists")
             my_fav_playlists = all_favorite_playlists()
