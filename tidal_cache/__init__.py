@@ -3,6 +3,7 @@ import glob
 import os
 import tempfile
 import shutil
+import traceback
 import uuid
 import json
 from dataclasses import dataclass
@@ -25,6 +26,9 @@ from tidalapi import Track, Album, Quality, Playlist
 # Tidal DL NG
 # Patching the config path
 import tidal_dl_ng.config
+from tidalapi.exceptions import ObjectNotFound
+
+
 def my_path_config_base() -> str:
     return "config/tidal"
 def my_path_file_token() -> str:
@@ -220,47 +224,51 @@ class TidalCache:
     def __download_track_if_not_present(self, album: Album, track: Track, temp_dir, line_prefix='  ') -> tuple[FavoriteTrackJSON, str]:
         file_template = os.path.join(temp_dir, f"tmpfile_{str(uuid.uuid4())}")
         if album.num_volumes > 1:
-            track_path = os.path.join(
-                self.__library_dir,
+            rel_track_path = os.path.join(
+                #self.__library_dir,
                 sanitize_filename(track.artist.name),
                 sanitize_filename(f"{album.year} - {track.album.name}"),
                 sanitize_filename(f"Volume {track.volume_num}")
             )
         else:
-            track_path = os.path.join(
-                self.__library_dir,
+            rel_track_path = os.path.join(
+                #self.__library_dir,
                 sanitize_filename(track.artist.name),
                 sanitize_filename(f"{album.year} - {track.album.name}")
             )
 
-        track_path_name_no_ext = os.path.join(track_path, sanitize_filename(f"{track.track_num:02} {track.name}"))
-        found_files = glob.glob(f"{glob.escape(track_path_name_no_ext)}.*")
-        if len(found_files) == 0:
+        full_track_path = os.path.join(self.__library_dir, rel_track_path)
+        rel_track_path_name_no_ext = os.path.join(rel_track_path, sanitize_filename(f"{track.track_num:02} {track.name}"))
+        full_track_path_name_no_ext = os.path.join(self.__library_dir, rel_track_path_name_no_ext)
+        rel_found_files = glob.glob(f"{glob.escape(rel_track_path_name_no_ext)}.*", root_dir=self.__library_dir)
+        if len(rel_found_files) == 0:
             print(f"{line_prefix}Downloading: {track.artist.name} - {track.album.name} - {track.name}")
 
-            result_dl, path_file = self.__dl.item(
+            result_dl, downloaded_tmp_path_file = self.__dl.item(
                 media=track,
                 file_template=file_template,
                 download_delay=False,
                 quality_audio=Quality.hi_res_lossless
             )
 
-            tmpfileext = os.path.splitext(path_file)[1]
-            track_path_name = f"{track_path_name_no_ext}{tmpfileext}"
+            tmpfileext = os.path.splitext(downloaded_tmp_path_file)[1]
+            rel_track_path_name = f"{rel_track_path_name_no_ext}{tmpfileext}"
+            full_track_path_name = f"{full_track_path_name_no_ext}{tmpfileext}"
 
-            os.makedirs(track_path, exist_ok=True)
-            shutil.move(path_file, track_path_name)
+            os.makedirs(full_track_path, exist_ok=True)
+            shutil.move(downloaded_tmp_path_file, full_track_path_name, copy_function=shutil.copytree)
 
         else:
             print(f"{line_prefix}Already exists: {track.artist.name} - {track.album.name} - {track.name}")
-            track_path_name = found_files[0]
+            full_track_path_name = rel_found_files[0]
+            rel_track_path_name = rel_found_files[0]
 
         return FavoriteTrackJSON(
             author=track.artist.name,
             album=track.album.name,
-            filename=os.path.basename(track_path_name),
+            filename=os.path.basename(full_track_path_name),
             volume=track.volume_num
-        ), track_path_name
+        ), rel_track_path_name
 
     def update(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -275,9 +283,14 @@ class TidalCache:
                           fn_logger=my_fn_logger, progress=Progress())
 
             for album in my_fav_albums.values():
-                for track in album.tracks():
-                    fav_track_json, file_path = self.__download_track_if_not_present(album, track, temp_dir, line_prefix='  ')
-                    favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
+                try:
+                    for track in album.tracks():
+                        fav_track_json, file_path = self.__download_track_if_not_present(album, track, temp_dir,
+                                                                                         line_prefix='  ')
+                        favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
+                except ObjectNotFound as e:
+                    print(f"! Tracks object not found in the album \"{album.name}\" with id {album.id}. Maybe you don't need this album...")
+
 
             print('* Caching all the tracks marked "Favorite"... ', end='')
             my_fav_tracks = all_favorite_tracks()
@@ -303,7 +316,7 @@ class TidalCache:
             for playlist in my_fav_playlists.values():
                 print(f"  - Playlist: {playlist.name}")
 
-                with open(f"{sanitize_filename(playlist.name)}.m3u8", "w") as playlist_file:
+                with open(f"{os.path.join(self.__library_dir, sanitize_filename(playlist.name))}.m3u8", "w") as playlist_file:
                     playlist_file.write("#EXTM3U\n")
                     for track in playlist.tracks():
                         #№if track.album.id not in my_fav_albums.keys():
@@ -316,7 +329,7 @@ class TidalCache:
                                                                                   temp_dir, line_prefix='    ')
                         #else:
                         #    pass
-                        favorite_tracks_json.enlist(track.id, fav_track_json)
+                        favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
 
                         playlist_file.write(f"#EXTINF:{track.duration},{urllib.parse.quote(track.name)}\n{urllib.request.pathname2url(file_path)}")
 

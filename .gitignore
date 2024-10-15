@@ -1,2 +1,5 @@
 dl
 config
+/dist
+/.idea
+/build
