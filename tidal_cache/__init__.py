@@ -30,11 +30,23 @@ from tidalapi.exceptions import ObjectNotFound
 
 
 def my_path_config_base() -> str:
-    return "config/tidal"
+    if os.name == 'nt':
+        from win32com.shell import shell, shellcon
+        user_appdata_folder = shell.SHGetFolderPath(0, shellcon.CSIDL_APPDATA, None, 0)
+        config_dir = os.path.join(user_appdata_folder, "TidalCache")
+        res = os.path.join(config_dir, "config", "tidal")
+        os.makedirs(res, exist_ok=True)
+        return res
+    else:
+        return "config/tidal"
+
 def my_path_file_token() -> str:
-    return os.path.join(my_path_config_base(), "token.json")
+    res = os.path.join(my_path_config_base(), "token.json")
+    return res
+
 def my_path_file_settings() -> str:
-    return os.path.join(my_path_config_base(), "settings.json")
+    res = os.path.join(my_path_config_base(), "settings.json")
+    return res
 
 tidal_dl_ng.config.path_config_base = my_path_config_base
 tidal_dl_ng.config.path_file_token = my_path_file_token
@@ -126,10 +138,10 @@ def BaseConfig_read(self, path: str) -> bool:
     return True
 tidal_dl_ng.config.BaseConfig.read = BaseConfig_read
 
-def BaseConfig_save(self, config_to_compare: str = None) -> None:
+#def BaseConfig_save(self, config_to_compare: str = None) -> None:
     # Do nothing, no outer settings file
-    pass
-tidal_dl_ng.config.BaseConfig.save = BaseConfig_save
+    #pass
+#tidal_dl_ng.config.BaseConfig.save = BaseConfig_save
 
 #tidal_dl_ng.config.BaseConfig = MyBaseConfig
 from tidal_dl_ng.config import BaseConfig
@@ -149,6 +161,9 @@ from tidal_dl_ng.config import BaseConfig
 from tidal_dl_ng.config import Settings, Tidal
 
 settings = Settings()
+#settings.data.quality_audio = Quality.hi_res_lossless
+#settings.data.metadata_cover_dimension = CoverDimensions.Px1280
+
 tidal = Tidal(settings)
 session = tidal.session
 login_result = tidal.login(fn_print=print)

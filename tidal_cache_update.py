@@ -1,6 +1,11 @@
 import os
 from tidal_cache import TidalCache
 
+import attr
+#import attrs
+attr.SOME_FIELD=123
+
+
 library_dir = "./tidal_cache"
 
 if os.name == 'nt':
