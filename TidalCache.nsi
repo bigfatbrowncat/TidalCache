@@ -60,10 +60,13 @@
 Section "TidalCache" SecDummy
 
   SetOutPath "$INSTDIR"
-  
-  ;ADD YOUR OWN FILES HERE...
   File /r "dist\TidalCache\*"
-  
+
+  SetOutPath "$INSTDIR\_internal\"
+  File /r "ffmpeg-7.1.1-essentials_build"
+
+  ;ADD YOUR OWN FILES HERE...
+
   ;Store installation folder
   WriteRegStr HKCU "Software\TidalCache" "" $INSTDIR
   

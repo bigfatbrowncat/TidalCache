@@ -1,6 +1,8 @@
 # System
 import glob
 import os
+import sys
+
 import tempfile
 import shutil
 import traceback
@@ -29,6 +31,19 @@ from tidalapi import Track, Album, Quality, Playlist
 # Patching the config path
 import tidal_dl_ng.config
 from tidalapi.exceptions import ObjectNotFound
+
+if os.name == 'nt':
+    bundle_dir = os.path.abspath(os.path.dirname(__file__))
+    path_binary_ffmpeg = os.path.join(bundle_dir, "..", "ffmpeg-7.1.1-essentials_build", "bin", "ffmpeg.exe")
+else:
+    path_binary_ffmpeg = "ffmpeg"
+
+print(f"Looking for ffmpeg at {path_binary_ffmpeg}...")
+if os.path.exists(path_binary_ffmpeg):
+    print("Found!")
+else:
+    print("Warning: ffmpeg is not found. Reinstall the application")
+
 
 def my_path_config_base() -> str:
     if os.name == 'nt':
@@ -162,9 +177,9 @@ from tidal_dl_ng.config import BaseConfig
 from tidal_dl_ng.config import Settings, Tidal
 
 settings = Settings()
-#settings.data.quality_audio = Quality.hi_res_lossless
-#settings.data.metadata_cover_dimension = CoverDimensions.Px1280
-settings.data.path_binary_ffmpeg = "./ffmpeg-7.1.1-essentials_build/bin/ffmpeg.exe"
+settings.data.quality_audio = Quality.hi_res_lossless
+settings.data.metadata_cover_dimension = CoverDimensions.Px1280
+settings.data.path_binary_ffmpeg = path_binary_ffmpeg
 
 tidal = Tidal(settings)
 session = tidal.session
@@ -283,7 +298,7 @@ class TidalCache:
 
         cover_path = os.path.join(full_track_path, "cover.jpg")
         if not os.path.exists(cover_path):
-            print(f"{line_prefix}Downloading cover for {track.artist.name} - {track.album.name}")
+            print(f"{line_prefix}Downloading album cover image for {track.artist.name} - {track.album.name}")
             # Saving cover.jpg
             with open(cover_path, "wb") as cover_file:
                 url_cover = track.album.image(int(CoverDimensions.Px1280))
