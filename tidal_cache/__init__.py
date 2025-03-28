@@ -7,9 +7,11 @@ import traceback
 import uuid
 import json
 from dataclasses import dataclass
+from importlib.metadata import metadata
 from json import JSONEncoder
 from typing import List, Set, Dict, Optional, Any
 import urllib.parse
+import tidal_dl_ng.metadata
 
 import attr
 import urllib
@@ -27,7 +29,6 @@ from tidalapi import Track, Album, Quality, Playlist
 # Patching the config path
 import tidal_dl_ng.config
 from tidalapi.exceptions import ObjectNotFound
-
 
 def my_path_config_base() -> str:
     if os.name == 'nt':
@@ -163,6 +164,7 @@ from tidal_dl_ng.config import Settings, Tidal
 settings = Settings()
 #settings.data.quality_audio = Quality.hi_res_lossless
 #settings.data.metadata_cover_dimension = CoverDimensions.Px1280
+settings.data.path_binary_ffmpeg = "./ffmpeg-7.1.1-essentials_build/bin/ffmpeg.exe"
 
 tidal = Tidal(settings)
 session = tidal.session
@@ -253,6 +255,7 @@ class TidalCache:
             )
 
         full_track_path = os.path.join(self.__library_dir, rel_track_path)
+
         rel_track_path_name_no_ext = os.path.join(rel_track_path, sanitize_filename(f"{track.track_num:02} {track.name}"))
         full_track_path_name_no_ext = os.path.join(self.__library_dir, rel_track_path_name_no_ext)
         rel_found_files = glob.glob(f"{glob.escape(rel_track_path_name_no_ext)}.*", root_dir=self.__library_dir)
@@ -278,6 +281,16 @@ class TidalCache:
             full_track_path_name = rel_found_files[0]
             rel_track_path_name = rel_found_files[0]
 
+        cover_path = os.path.join(full_track_path, "cover.jpg")
+        if not os.path.exists(cover_path):
+            print(f"{line_prefix}Downloading cover for {track.artist.name} - {track.album.name}")
+            # Saving cover.jpg
+            with open(cover_path, "wb") as cover_file:
+                url_cover = track.album.image(int(CoverDimensions.Px1280))
+                path_cover = ""
+                data_cover: str | bytes = tidal_dl_ng.metadata.Metadata.cover_data(url=url_cover, path_file=path_cover)
+                cover_file.write(data_cover)
+
         return FavoriteTrackJSON(
             author=track.artist.name,
             album=track.album.name,
@@ -298,6 +311,7 @@ class TidalCache:
                           fn_logger=my_fn_logger, progress=Progress())
 
             for album in my_fav_albums.values():
+
                 try:
                     for track in album.tracks():
                         fav_track_json, file_path = self.__download_track_if_not_present(album, track, temp_dir,
@@ -315,12 +329,15 @@ class TidalCache:
             for track in my_fav_tracks.values():
                 if track.album.id not in my_fav_albums.keys():
                     # Downloading the album metadata for the track if needed
-                    if track.album.id not in cached_albums:
-                        album = tidal.session.album(track.album.id)
-                        cached_albums[track.album.id] = album
+                    try:
+                        if track.album.id not in cached_albums:
+                            album = tidal.session.album(track.album.id)
+                            cached_albums[track.album.id] = album
 
-                    fav_track_json, file_path = self.__download_track_if_not_present(cached_albums[track.album.id], track, temp_dir, line_prefix='  ')
-                    favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
+                        fav_track_json, file_path = self.__download_track_if_not_present(cached_albums[track.album.id], track, temp_dir, line_prefix='  ')
+                        favorite_tracks_json.enlist(self.__library_dir, track.id, fav_track_json)
+                    except ObjectNotFound:
+                        print(f"Oops. Album {track.album.name} for the track {track.name} not found. Skipping...")
 
             print("* Caching all the tracks from the user's playlists and user's favorites playlists")
             my_fav_playlists = all_favorite_playlists()
