@@ -15,6 +15,8 @@ from typing import List, Set, Dict, Optional, Any
 import urllib.parse
 import tidal_dl_ng.metadata
 
+from PIL import Image
+
 import attr
 import urllib
 import urllib.request
@@ -296,15 +298,23 @@ class TidalCache:
             full_track_path_name = rel_found_files[0]
             rel_track_path_name = rel_found_files[0]
 
+        cover_1280_path = os.path.join(full_track_path, "cover_1280.jpg")
         cover_path = os.path.join(full_track_path, "cover.jpg")
+
         if not os.path.exists(cover_path):
             print(f"{line_prefix}Downloading album cover image for {track.artist.name} - {track.album.name}")
-            # Saving cover.jpg
-            with open(cover_path, "wb") as cover_file:
+
+            # Downloading and saving cover_1280.jpg
+            with open(cover_1280_path, "wb") as cover_file:
                 url_cover = track.album.image(int(CoverDimensions.Px1280))
                 path_cover = ""
                 data_cover: str | bytes = tidal_dl_ng.metadata.Metadata.cover_data(url=url_cover, path_file=path_cover)
                 cover_file.write(data_cover)
+
+            # Here we are reencoding the cover image
+            # to guarantee its compatibility with HIBY players
+            im = Image.open(cover_1280_path)
+            im.save(cover_path)
 
         return FavoriteTrackJSON(
             author=track.artist.name,

@@ -5,3 +5,4 @@ tidalapi==0.7.6
 tidal_dl_ng==0.15.6
 pyinstaller
 pywin32
+pillow
