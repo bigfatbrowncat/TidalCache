@@ -21,7 +21,7 @@ people or property during the usage of the tool. Use it at your own risk.
 
 # Usage
 
-Install the application from the ()[releases]
+Install the application from the [releases](https://github.com/bigfatbrowncat/TidalCache/releases)
 
 Follow the instructions in the application's screen. You will need to:
 1. Open a web page that the application requests (in tthe console window).
